@@ -6,8 +6,11 @@
 -- Cache:    mercenaries.ActiveHorses[npcEntityName] = { entRef, soulGuid, ownerWuid }
 -- Pools:    mercenaries.HorseSouls.common / .elite (defined in mercenaries.lua)
 -- Naming:   horse entity name = "MercenaryHorse_" .. npcEntityName
--- Persist:  SaveString tag "MercHorseMap" — "npcName=soulGuid|npcName2=soulGuid2"
+-- Persist:  SaveString tag "MercHorseMapV2" — "npcName=soulGuid|npcName2=soulGuid2"
 -- =======================================================================
+
+local MERC_HORSE_MAP_TAG = 'MercHorseMapV2'
+local MERC_HORSE_MAP_OLD_TAG = 'MercHorseMap'
 
 -- Internal: build entity name for the horse owned by a given NPC.
 function mercenaries:HorseNameForMerc(npcName)
@@ -32,7 +35,13 @@ end
 function mercenaries:GetSavedHorseSoul(npcName)
     if not npcName then return nil end
     if not self.SavedHorseSouls then
-        self.SavedHorseSouls = self:ParseHorseMap(self:LoadString('MercHorseMap'))
+        self.SavedHorseSouls = self:ParseHorseMap(self:LoadString(MERC_HORSE_MAP_TAG))
+        if self:_TableCount(self.SavedHorseSouls) == 0 then
+            self.SavedHorseSouls = self:ParseHorseMap(self:LoadString(MERC_HORSE_MAP_OLD_TAG))
+            if self:_TableCount(self.SavedHorseSouls) > 0 then
+                self:SaveHorseMap()
+            end
+        end
     end
     return self.SavedHorseSouls[npcName]
 end
@@ -49,43 +58,80 @@ function mercenaries:ResolveHorseEntityByMercName(npcName)
     return horseEnt
 end
 
--- Internal: pick an appropriate horse soul GUID for a given NPC entity.
--- Priority:
---   1. Custom companion with dedicated horse → CustomCompanionHorses[ccID]
---   2. Custom companion without dedicated horse → round-robin elite pool
---   3. Generic merc → round-robin common pool
-function mercenaries:PickHorseSoul(npcEnt)
-    if not npcEnt then return nil end
-    local name = npcEnt:GetName() or ''
-
-    -- Custom companion path
-    if string.find(name, 'MercenaryCustomCompanion') then
-        -- Reverse lookup by soul GUID embedded in entity name:
-        -- format: MercenaryCustomCompanion_<soulGuid>_<random>
-        for ccID, data in pairs(self.CustomCompanionsData) do
-            if data and data.guid and string.find(name, data.guid, 1, true) then
-                local dedicated = self.CustomCompanionHorses[ccID]
-                if dedicated then return dedicated end
-                break
-            end
+function mercenaries:GetHorseEntitySoulGuid(horseEnt)
+    if not horseEnt or not horseEnt.soul then return nil end
+    local ok, soulGuid = pcall(function()
+        if horseEnt.soul.GetSharedSoulId then
+            return horseEnt.soul:GetSharedSoulId()
         end
-        -- Fallback: elite pool round-robin
-        local pool = self.HorseSouls.elite
-        if pool and #pool > 0 then
-            local idx = self.HorseSoulIndex.elite
-            local soul = pool[idx]
-            self.HorseSoulIndex.elite = (idx % #pool) + 1
-            return soul
+        return nil
+    end)
+    if ok and soulGuid then return tostring(soulGuid) end
+    return nil
+end
+
+function mercenaries:IsHorseSoulAssigned(soulGuid, exceptNpcName)
+    if not soulGuid then return false end
+    self.SavedHorseSouls = self.SavedHorseSouls or {}
+
+    for npcName, savedSoulGuid in pairs(self.SavedHorseSouls) do
+        if npcName ~= exceptNpcName and savedSoulGuid == soulGuid then
+            return true
         end
     end
 
-    -- Generic merc path: common pool round-robin
-    local pool = self.HorseSouls.common
+    for npcName, data in pairs(self.ActiveHorses) do
+        if npcName ~= exceptNpcName and data and data.soulGuid == soulGuid then
+            return true
+        end
+    end
+
+    return false
+end
+
+function mercenaries:PickFirstFreeHorseSoul(pool, exceptNpcName)
     if not pool or #pool == 0 then return nil end
-    local idx = self.HorseSoulIndex.common
-    local soul = pool[idx]
-    self.HorseSoulIndex.common = (idx % #pool) + 1
-    return soul
+
+    for _, soulGuid in ipairs(pool) do
+        if not self:IsHorseSoulAssigned(soulGuid, exceptNpcName) then
+            return soulGuid
+        end
+    end
+
+    return pool[1]
+end
+
+function mercenaries:GetCustomCompanionHorseSoul(npcName)
+    if not npcName or not string.find(npcName, 'MercenaryCustomCompanion') then return nil end
+
+    -- Reverse lookup by soul GUID embedded in entity name:
+    -- format: MercenaryCustomCompanion_<soulGuid>_<random>
+    for ccID, data in pairs(self.CustomCompanionsData) do
+        if data and data.guid and string.find(npcName, data.guid, 1, true) then
+            return self.CustomCompanionHorses[ccID]
+        end
+    end
+
+    return nil
+end
+
+-- Internal: pick a stable, unassigned horse soul for a given NPC entity.
+function mercenaries:PickHorseSoul(npcEnt)
+    if not npcEnt then return nil end
+    local npcName = npcEnt:GetName() or ''
+    local saved = self:GetSavedHorseSoul(npcName)
+    if saved then return saved end
+
+    local dedicated = self:GetCustomCompanionHorseSoul(npcName)
+    if dedicated and not self:IsHorseSoulAssigned(dedicated, npcName) then
+        return dedicated
+    end
+
+    if string.find(npcName, 'MercenaryCustomCompanion') then
+        return self:PickFirstFreeHorseSoul(self.HorseSouls.elite, npcName)
+    end
+
+    return self:PickFirstFreeHorseSoul(self.HorseSouls.common, npcName)
 end
 
 -- Internal: register a spawned horse in the cache and persist the mapping.
@@ -104,25 +150,26 @@ function mercenaries:RegisterHorse(npcName, horseEnt, soulGuid, ownerWuid)
     end
 end
 
--- Internal: drop a horse from the cache and persist the mapping.
-function mercenaries:UnregisterHorse(npcName)
+-- Internal: drop a live horse from cache. Saved ownership is kept unless
+-- clearSaved is explicitly true (dismiss/death cleanup).
+function mercenaries:UnregisterHorse(npcName, clearSaved)
     if not npcName then return end
     if self.ActiveHorses[npcName] then
         self.ActiveHorses[npcName] = nil
+    end
+    if clearSaved then
         if self.SavedHorseSouls then
             self.SavedHorseSouls[npcName] = nil
         end
-        self:SaveHorseMap()
     end
+    self:SaveHorseMap()
 end
 
 -- =======================================================================
 -- PUBLIC API — called from mercenary_follow.xml ExecuteLua nodes
 -- =======================================================================
 
--- Spawn a horse for the given NPC entity. Returns the horse entity (or nil on failure).
--- Idempotent: if the merc already has a live horse cached, it is reused.
-function mercenaries:SpawnHorseFor(npcEnt)
+function mercenaries:SpawnHorseEntityFor(npcEnt, soulGuid)
     if not npcEnt then return nil end
     local npcName = npcEnt:GetName() or ''
     if npcName == '' then return nil end
@@ -135,12 +182,12 @@ function mercenaries:SpawnHorseFor(npcEnt)
     if existing then
         local soulGuid = self.ActiveHorses[npcName] and self.ActiveHorses[npcName].soulGuid
             or self:GetSavedHorseSoul(npcName)
+            or self:GetHorseEntitySoulGuid(existing)
         local ownerWuid = npcEnt.this and npcEnt.this.id or npcEnt.id
         self:RegisterHorse(npcName, existing, soulGuid, ownerWuid)
         return existing
     end
 
-    local soulGuid = self:PickHorseSoul(npcEnt)
     if not soulGuid then
         System.LogAlways('[MercHorse] No horse soul available for ' .. npcName)
         return nil
@@ -181,16 +228,65 @@ function mercenaries:SpawnHorseFor(npcEnt)
     return horseEnt
 end
 
--- Despawn the horse owned by the given NPC entity (if any).
-function mercenaries:DespawnHorseFor(npcEnt)
+-- Ensure a merc has its own persistent horse. If the live entity disappeared,
+-- respawn the same saved horse soul instead of assigning a different one.
+function mercenaries:EnsureHorseForMerc(npcEnt)
+    if not npcEnt then return nil end
+    local npcName = npcEnt:GetName() or ''
+    if npcName == '' then return nil end
+
+    local existing = self:ResolveHorseEntityByMercName(npcName)
+    if existing then
+        local ownerWuid = npcEnt.this and npcEnt.this.id or npcEnt.id
+        local soulGuid = self:GetSavedHorseSoul(npcName)
+            or self:GetHorseEntitySoulGuid(existing)
+            or self:PickHorseSoul(npcEnt)
+        self:RegisterHorse(npcName, existing, soulGuid, ownerWuid)
+        return existing
+    end
+
+    local soulGuid = self:GetSavedHorseSoul(npcName) or self:PickHorseSoul(npcEnt)
+    if not soulGuid then return nil end
+
+    return self:SpawnHorseEntityFor(npcEnt, soulGuid)
+end
+
+-- Compatibility wrapper for older BT/Lua call sites.
+function mercenaries:SpawnHorseFor(npcEnt)
+    return self:EnsureHorseForMerc(npcEnt)
+end
+
+-- Remove a live horse entity but keep the saved merc->horse ownership.
+function mercenaries:ReleaseHorseFor(npcEnt)
     if not npcEnt then return end
     local npcName = npcEnt:GetName() or ''
     if npcName == '' then return end
-    self:DespawnHorseByMercName(npcName)
+    self:ReleaseHorseEntityByMercName(npcName)
+end
+
+function mercenaries:ReleaseHorseEntityByMercName(npcName)
+    if not npcName then return end
+    local horseName = self:HorseNameForMerc(npcName)
+    if not horseName then return end
+
+    local horseEnt = System.GetEntityByName(horseName)
+    if horseEnt then
+        local ok, err = pcall(function() System.RemoveEntity(horseEnt.id) end)
+        if not ok then
+            System.LogAlways('[MercHorse] Release EXCEPTION for ' .. npcName .. ': ' .. tostring(err))
+        end
+    end
+    self:UnregisterHorse(npcName, false)
+end
+
+-- Despawn the horse owned by the given NPC entity (if any), but preserve the
+-- saved assignment. Destructive cleanup should call DespawnHorseByMercName.
+function mercenaries:DespawnHorseFor(npcEnt)
+    self:ReleaseHorseFor(npcEnt)
 end
 
 -- Despawn by NPC name directly — useful when the NPC entity is already gone
--- (e.g. cleanup after merc death/despawn).
+-- (e.g. cleanup after merc death/despawn). This forgets the assignment.
 function mercenaries:DespawnHorseByMercName(npcName)
     if not npcName then return end
     local horseName = self:HorseNameForMerc(npcName)
@@ -203,20 +299,31 @@ function mercenaries:DespawnHorseByMercName(npcName)
             System.LogAlways('[MercHorse] Despawn EXCEPTION for ' .. npcName .. ': ' .. tostring(err))
         end
     end
-    self:UnregisterHorse(npcName)
+    self:UnregisterHorse(npcName, true)
 end
 
 -- Returns the WUID of the horse owned by the given NPC, or nil.
 function mercenaries:GetHorseForMerc(npcEnt)
     if not npcEnt then return nil end
     local npcName = npcEnt:GetName() or ''
-    local ent = self:ResolveHorseEntityByMercName(npcName)
+    local ent = self:EnsureHorseForMerc(npcEnt)
     if ent and ent.this then return ent.this.id end
     return nil
 end
 
 -- True when at least one tracked merc currently owns a live horse.
 function mercenaries:IsAnyMercMounted()
+    local playerMounted = false
+    pcall(function()
+        if player and player.human then
+            local horseWuid = player.human:GetHorse()
+            if horseWuid and tostring(horseWuid) ~= "" and tostring(horseWuid) ~= "0" then
+                playerMounted = true
+            end
+        end
+    end)
+    if not playerMounted then return false end
+
     for _, data in pairs(self.ActiveHorses) do
         if data and data.entRef then
             return true
@@ -232,31 +339,39 @@ end
 
 function mercenaries:SaveHorseMap()
     local parts = {}
-    self.SavedHorseSouls = self.SavedHorseSouls or self:ParseHorseMap(self:LoadString('MercHorseMap'))
+    self.SavedHorseSouls = self.SavedHorseSouls or {}
 
     for npcName, data in pairs(self.ActiveHorses) do
-        if data then
-            local soulGuid = data.soulGuid or self.SavedHorseSouls[npcName]
-            -- Sanitize: skip names with our delimiters to prevent corruption
-            if soulGuid and not string.find(npcName, '|') and not string.find(npcName, '=') then
-                data.soulGuid = soulGuid
-                self.SavedHorseSouls[npcName] = soulGuid
-                table.insert(parts, npcName .. '=' .. soulGuid)
-            end
+        if data and data.soulGuid then
+            self.SavedHorseSouls[npcName] = data.soulGuid
+        end
+    end
+
+    for npcName, soulGuid in pairs(self.SavedHorseSouls) do
+        -- Sanitize: skip names with our delimiters to prevent corruption
+        if soulGuid and not string.find(npcName, '|') and not string.find(npcName, '=') then
+            table.insert(parts, npcName .. '=' .. soulGuid)
         end
     end
     if #parts == 0 then
         -- Encode "empty" as a sentinel because SaveString refuses empty payloads
-        self:SaveString('MercHorseMap', '__empty__')
+        self:SaveString(MERC_HORSE_MAP_TAG, '__empty__')
     else
-        self:SaveString('MercHorseMap', table.concat(parts, '|'))
+        self:SaveString(MERC_HORSE_MAP_TAG, table.concat(parts, '|'))
     end
 end
 
 -- Parse the persisted map and re-register live horses found in the world.
 -- Orphan entries (NPC despawned, horse missing) are dropped silently.
 function mercenaries:LoadHorseMap()
-    local raw = self:LoadString('MercHorseMap')
+    local raw = self:LoadString(MERC_HORSE_MAP_TAG)
+    if not raw or raw == '__empty__' then
+        raw = self:LoadString(MERC_HORSE_MAP_OLD_TAG)
+        if raw and raw ~= '__empty__' then
+            System.LogAlways('[MercHorse] Migrating legacy horse map to V2.')
+        end
+    end
+
     if not raw or raw == '__empty__' then
         self.ActiveHorses = {}
         self.SavedHorseSouls = {}
@@ -275,8 +390,9 @@ function mercenaries:LoadHorseMap()
                 ownerWuid = nil, -- not persisted; resolved on next BT tick
             }
         end
-        -- If horse is missing, skip - BT will respawn naturally on next mount tick.
+        -- If horse is missing, keep the saved soul - BT will respawn it.
     end
+    self:SaveHorseMap()
 end
 
 -- Called via Script.SetTimerForFunction on game load, after RebuildMercCache.
@@ -289,20 +405,15 @@ end
 
 -- Drop horses whose owner NPC is no longer in ActiveMercs (despawned/dead).
 function mercenaries:PruneOrphanHorses()
+    local orphanNames = {}
     for npcName, data in pairs(self.ActiveHorses) do
         local owner = self.ActiveMercs[npcName]
         if not owner then
-            -- Owner is gone — clean up the dangling horse entity if any
-            local horseName = self:HorseNameForMerc(npcName)
-            local horseEnt = horseName and System.GetEntityByName(horseName) or nil
-            if horseEnt then
-                pcall(function() System.RemoveEntity(horseEnt.id) end)
-            end
-            self.ActiveHorses[npcName] = nil
-            if self.SavedHorseSouls then
-                self.SavedHorseSouls[npcName] = nil
-            end
+            table.insert(orphanNames, npcName)
         end
+    end
+    for _, npcName in ipairs(orphanNames) do
+        self:DespawnHorseByMercName(npcName)
     end
     self:SaveHorseMap()
 end
@@ -325,9 +436,6 @@ function mercenaries:PruneDeadHorses()
             end
             if not alive then
                 self.ActiveHorses[npcName] = nil
-                if self.SavedHorseSouls then
-                    self.SavedHorseSouls[npcName] = nil
-                end
                 changed = true
             end
         end
@@ -335,7 +443,30 @@ function mercenaries:PruneDeadHorses()
     if changed then self:SaveHorseMap() end
 end
 
--- Force-cleanup all horses (used by dismiss / fast-travel paths).
+-- Release live horse entities but keep persistent assignments.
+function mercenaries:ReleaseAllHorseEntities()
+    local names = {}
+    local seen = {}
+    for npcName, _ in pairs(self.ActiveHorses) do
+        table.insert(names, npcName)
+        seen[npcName] = true
+    end
+    if self.SavedHorseSouls then
+        for npcName, _ in pairs(self.SavedHorseSouls) do
+            if not seen[npcName] then
+                table.insert(names, npcName)
+            end
+        end
+    end
+
+    for _, npcName in ipairs(names) do
+        self:ReleaseHorseEntityByMercName(npcName)
+    end
+    self.ActiveHorses = {}
+    self:SaveHorseMap()
+end
+
+-- Force-cleanup all horses and forget assignments (used by dismiss paths).
 function mercenaries:DespawnAllHorses()
     for npcName, _ in pairs(self.ActiveHorses) do
         local horseName = self:HorseNameForMerc(npcName)
@@ -364,6 +495,31 @@ function mercenaries:TeleportHorseForMercName(npcName, targetPos)
     if not ok then
         System.LogAlways('[MercHorse] Teleport EXCEPTION for ' .. tostring(npcName) .. ': ' .. tostring(err))
         return nil
+    end
+
+    return horseEnt
+end
+
+function mercenaries:TeleportHorseNearMercIfFar(npcEnt, threshold)
+    if not npcEnt then return nil end
+    threshold = threshold or 20.0
+
+    local npcName = npcEnt:GetName() or ''
+    if npcName == '' then return nil end
+
+    local horseEnt = self:EnsureHorseForMerc(npcEnt)
+    if not horseEnt then return nil end
+
+    local npcPos = npcEnt:GetPos()
+    local horsePos = horseEnt:GetPos()
+    if not npcPos or not horsePos then return horseEnt end
+
+    local dx = npcPos.x - horsePos.x
+    local dy = npcPos.y - horsePos.y
+    local dz = npcPos.z - horsePos.z
+    local distance = math.sqrt(dx*dx + dy*dy + dz*dz)
+    if distance > threshold then
+        return self:TeleportHorseForMercName(npcName, npcPos)
     end
 
     return horseEnt

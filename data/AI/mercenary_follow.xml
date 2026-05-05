@@ -53,6 +53,7 @@
                                     <IfCondition failOnCondition="false" condition="$playerIsMounted &amp; $horseSpawned">
                                         <ExecuteLua code="
                                             local ok, err = pcall(function()
+                                                mercenaries:TeleportHorseNearMercIfFar(entity, 20.0)
                                                 local horseWuid = mercenaries:GetHorseForMerc(entity)
                                                 if horseWuid then
                                                     data.horse = horseWuid
@@ -68,7 +69,8 @@
                                         <Sequence>
                                             <ExecuteLua code="
                                                 local ok, err = pcall(function()
-                                                    local horseEnt = mercenaries:SpawnHorseFor(entity)
+                                                    local horseEnt = mercenaries:EnsureHorseForMerc(entity)
+                                                    mercenaries:TeleportHorseNearMercIfFar(entity, 20.0)
                                                     if horseEnt and horseEnt.this then
                                                         data.horse = horseEnt.this.id
                                                         data.horseSpawned = true
@@ -78,18 +80,6 @@
                                                 end)
                                                 if not ok then System.LogAlways('[MercHorse] BT spawn wrapper EXCEPTION: ' .. tostring(err)) end
                                             " />
-                                        </Sequence>
-                                    </IfCondition>
-
-                                    <IfCondition failOnCondition="false" condition="~$playerIsMounted &amp; $horseSpawned">
-                                        <Sequence>
-                                            <ExecuteLua code="
-                                                local ok, err = pcall(function()
-                                                    mercenaries:DespawnHorseFor(entity)
-                                                end)
-                                                if not ok then System.LogAlways('[MercHorse] BT despawn wrapper EXCEPTION: ' .. tostring(err)) end
-                                            " />
-                                            <Expression expressions="$horseSpawned = false" />
                                         </Sequence>
                                     </IfCondition>
 

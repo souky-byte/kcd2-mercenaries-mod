@@ -212,6 +212,24 @@ mercenaries.HorseSouls = {
     }
 }
 
+mercenaries.MercenaryHorseDefinitions = {}
+for _, soulGuid in ipairs(mercenaries.HorseSouls.common) do
+    table.insert(mercenaries.MercenaryHorseDefinitions, {
+        soulGuid = soulGuid,
+        sourceSoulGuid = soulGuid,
+        displayName = 'Mercenary Horse',
+        tier = 'common',
+    })
+end
+for _, soulGuid in ipairs(mercenaries.HorseSouls.elite) do
+    table.insert(mercenaries.MercenaryHorseDefinitions, {
+        soulGuid = soulGuid,
+        sourceSoulGuid = soulGuid,
+        displayName = 'Mercenary Elite Horse',
+        tier = 'elite',
+    })
+end
+
 -- Per-companion dedicated horse soul. Falls back to elite pool if not listed.
 -- TODO: replace placeholder GUIDs (currently picks from common pool) with the
 -- canonical horses for these heroes once their vanilla soul IDs are known.

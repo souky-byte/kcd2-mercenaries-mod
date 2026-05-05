@@ -123,10 +123,10 @@ function mercenaries:MonitorMainQuestLoop()
         
         System.LogAlways(string.format('[Mercenary] %s detected! Temp idling mercs.', reason))
 
-        -- Fast travel can leave horses far behind; flush them so the BT can
-        -- respawn fresh mounts when the player lands and is still mounted.
+        -- Fast travel can leave live horse entities far behind; release only
+        -- the live entities and keep the persistent merc->horse assignment.
         if inFastTravelCooldown then
-            self:DespawnAllHorses()
+            self:ReleaseAllHorseEntities()
         end
         
     elseif _G.MercIdle and not shouldBeIdle then
