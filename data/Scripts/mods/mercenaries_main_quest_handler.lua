@@ -122,6 +122,12 @@ function mercenaries:MonitorMainQuestLoop()
         elseif inFastTravelCooldown then reason = "Fast Travel/Teleport" end
         
         System.LogAlways(string.format('[Mercenary] %s detected! Temp idling mercs.', reason))
+
+        -- Fast travel can leave horses far behind; flush them so the BT can
+        -- respawn fresh mounts when the player lands and is still mounted.
+        if inFastTravelCooldown then
+            self:DespawnAllHorses()
+        end
         
     elseif _G.MercIdle and not shouldBeIdle then
         _G.MercIdle = false

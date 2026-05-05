@@ -24,6 +24,8 @@ function mercenaries:MonitorDistanceAndTeleport()
                         local safePos, _ = self:GetSafeSpawnPosition(player, 10)
                         if safePos then
                             ent:SetPos({x = safePos.x, y = safePos.y, z = safePos.z})
+
+                            self:TeleportHorseForMercName(name, safePos)
                         end
                     end
                 end

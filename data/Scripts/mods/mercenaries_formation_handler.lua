@@ -47,6 +47,10 @@ function mercenaries:UpdateFormationSlots()
         local totalMercs = #alive
         local width = (totalMercs >= 15) and 3 or 2
 
+        -- When the squad is mounted, follow targets stay the same but the BT
+        -- uses a wider spacing offset (broadcast via formationOffsetMultiplier).
+        local mountedSpacing = self:IsAnyMercMounted()
+
         for i, v in ipairs(alive) do
             local slot = i - 1
             local followTarget = nil  -- nil means "follow the player" (resolved in BT)
@@ -63,6 +67,7 @@ function mercenaries:UpdateFormationSlots()
                 slot        = slot,
                 followTarget = followTarget,
                 totalMercs  = totalMercs,
+                isMounted   = mountedSpacing,
             }
         end
     end)
@@ -84,10 +89,16 @@ function mercenaries:CalculateFormationTarget(bt_data, myWuid)
         if data then
             bt_data.formationSlot = data.slot
             bt_data.followTarget  = data.followTarget or bt_data.playerWUID
+            -- BT-side spacing multiplier: 4x while mounted, 1x on foot.
+            -- Read by the foot-formation MoveParamsDecorator if it consults
+            -- $formationOffsetMultiplier (CrimeFollower in mounted Assist mode
+            -- uses its own internal spacing).
+            bt_data.formationOffsetMultiplier = data.isMounted and 4.0 or 1.0
         else
             -- Fallback: slot 0, follow the player directly
             bt_data.formationSlot = 0
             bt_data.followTarget  = bt_data.playerWUID
+            bt_data.formationOffsetMultiplier = 1.0
         end
     end)
 

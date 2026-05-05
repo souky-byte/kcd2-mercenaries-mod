@@ -163,6 +163,72 @@ mercenaries.Clowns = {
     "c4b61546-ed82-4b7c-91bb-e7daea254af1"
 }
 
+-- =======================================================================
+-- HORSE SOULS — vanilla horse soul GUIDs used when spawning mounts for mercs.
+-- Extracted from the inline list previously embedded in mercenary_follow.xml.
+-- common: generic mercs round-robin pool
+-- elite:  reserved for hero-tier custom companions without a dedicated horse
+-- =======================================================================
+mercenaries.HorseSouls = {
+    common = {
+        '00af7178-368d-44f0-9368-a7b7750c098c',
+        '08672b2a-14dd-48df-98e3-e8b4ef7694fb',
+        '12ae5a12-fd57-4765-9fd2-da839545b61e',
+        '1834d21b-f362-4079-a847-97decfe438d7',
+        '2629b487-e123-4012-a9ab-dc53ea7a2ada',
+        '2f91a84b-36ac-4980-8343-90f9634004e2',
+        '35d35777-3bc4-450c-9d0c-218f906b7b9d',
+        '3e35d2f2-9638-449f-afe0-2879a9a67dfb',
+        '45b7dbbf-d1f1-4bdd-abc0-ea86dc30ba47',
+        '4ddb9978-e582-4d27-82d5-25bad9d56c51',
+        '55353ccc-b4bb-4d38-ba64-10d95607421c',
+        '5d58ed68-d06e-4ce5-bb6f-e5bf801ffc3c',
+        '63415fa6-4b96-4a8a-a72c-f6d3081d6189',
+        '6d299a92-4857-400c-8448-bfdaceb92523',
+        '748c4f4e-e6ef-423c-89d9-a26c23f787d9',
+        '7c6d76e6-6ad2-4771-b579-3cf7224b6bdc',
+        '83a92d89-63a1-428f-bc2b-9377104ae77a',
+        '8b2c12ef-a87c-492a-9adf-2b8e917c7e3b',
+        '93f4d43d-36e5-40ba-b98d-44fd8564e8b7',
+        '9d3ccd40-2c39-40ff-a149-ba3c260bd8a2',
+        'a42123d7-6f90-48f7-95df-048446b729fc',
+        'b12466d8-d4cd-4746-abd5-fcb18301e7e4',
+        'b9693f42-6ee9-4a75-9b62-5bc1bdd9138a',
+        'c4dd79ae-fa05-4c7f-b1b5-20ecb08e7ebc',
+        'd216ce2d-15ae-434b-b714-cacfcd3c7d53',
+        'e3114d8a-e817-407d-8efb-da6c05d91dd8',
+        'f0021bd4-ed58-4c01-ac07-ac0ad2cfaf5d',
+        'f3d4dec9-1c07-4fb4-9fe5-7694f6756058',
+        'fc0e6251-b314-4398-b83f-3a66a52961ee',
+        'ffedd2f9-b766-4985-b384-8bbe8229ae4a',
+    },
+    elite = {
+        -- Best-quality horses from the common pool (subjective pick by colour/breed).
+        -- TODO: replace with curated elite-tier vanilla GUIDs once verified in-game.
+        'b12466d8-d4cd-4746-abd5-fcb18301e7e4',
+        '9d3ccd40-2c39-40ff-a149-ba3c260bd8a2',
+        '7c6d76e6-6ad2-4771-b579-3cf7224b6bdc',
+        '6d299a92-4857-400c-8448-bfdaceb92523',
+    }
+}
+
+-- Per-companion dedicated horse soul. Falls back to elite pool if not listed.
+-- TODO: replace placeholder GUIDs (currently picks from common pool) with the
+-- canonical horses for these heroes once their vanilla soul IDs are known.
+mercenaries.CustomCompanionHorses = {
+    [15] = '63415fa6-4b96-4a8a-a72c-f6d3081d6189', -- Jan Zizka
+    [16] = '00af7178-368d-44f0-9368-a7b7750c098c', -- The Devil
+    [17] = '83a92d89-63a1-428f-bc2b-9377104ae77a', -- Father Godwin
+    [18] = 'b9693f42-6ee9-4a75-9b62-5bc1bdd9138a', -- Sir Hans Capon
+}
+
+-- Round-robin index for common horse pool (parallels SoulIndex)
+mercenaries.HorseSoulIndex = { common = 1, elite = 1 }
+
+-- PERFORMANCE: Per-merc horse cache, parallel to ActiveMercs.
+-- [npcEntityName] = { entRef, soulGuid, ownerWuid }
+mercenaries.ActiveHorses = {}
+
 -- Custom Companion Dictionary (Maps ccID to Soul GUID and Cost)
 mercenaries.CustomCompanionsData = {
     [1]  = { guid = "74db1d52-7360-4ed3-b716-f6a53f47f2f9", cost = 1500 }, -- Kubenka
@@ -198,6 +264,8 @@ function mercenaries:SetState(state)
     if state == "dismiss" then
         _G.MercenariesDismissed = true
         self:SaveString("MercenariesDismissed", "1")
+        -- Clean up any spawned mounts so they don't linger after the squad flees.
+        self:DespawnAllHorses()
         Game.SendInfoText('merc_info_dismissed', false, 0, 3)
     elseif state == "wait" then
         _G.MercIdle = true
@@ -320,6 +388,7 @@ function mercenaries.LowPriorityMonitorLoop()
 
         mercenaries:PruneMercCache()
         mercenaries:UpdateFormationSlots()
+        mercenaries:PruneDeadHorses()
     end
 
     Script.SetTimerForFunction(5000, "mercenaries.LowPriorityMonitorLoop")
@@ -363,6 +432,9 @@ function mercenaries:OnGameplayStarted(actionName, eventName, argTable)
     -- This is the ONE permitted full-world NPC scan — done once on load,
     -- not every second in the monitor loop.
     Script.SetTimerForFunction(2000, "mercenaries.RebuildMercCacheDelayed")
+    -- Horse cache rebuild runs slightly later so ActiveMercs is populated when
+    -- PruneOrphanHorses checks for owner NPCs.
+    Script.SetTimerForFunction(2500, "mercenaries.RebuildHorseCacheDelayed")
     if not mercenaries.timersStarted then
         mercenaries.timersStarted = true
         Script.SetTimerForFunction(1000, "mercenaries.MonitorLoop")
@@ -383,6 +455,7 @@ Script.LoadScript("Scripts/mods/mercenaries_formation_handler.lua")
 Script.LoadScript("Scripts/mods/mercenaries_main_quest_handler.lua")
 Script.LoadScript("Scripts/mods/mercenaries_saving.lua")
 Script.LoadScript("Scripts/mods/mercenaries_lookatinteraction.lua")
+Script.LoadScript("Scripts/mods/mercenaries_horses.lua")
 
 
 -- Register commands

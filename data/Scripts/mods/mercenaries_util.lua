@@ -47,6 +47,9 @@ function mercenaries:PruneMercCache()
     for name, ent in pairs(self.ActiveMercs) do
         if not self:IsAliveAndWell(ent, true) then
             self.ActiveMercs[name] = nil
+            -- Clean up any horse owned by this dead/despawned merc immediately;
+            -- the corpse will follow on the existing 10s timer.
+            self:DespawnHorseByMercName(name)
             Script.SetTimerForFunction(10000, "mercenaries.DespawnMerc", ent.id)
         end
     end
