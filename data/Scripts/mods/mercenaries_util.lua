@@ -4,15 +4,37 @@
 -- PruneMercCache:   called once per second in MonitorLoop to remove dead refs.
 -- All hot-path functions iterate ActiveMercs instead of GetEntitiesByClass.
 -- =======================================================================
+--
+-- Major-battle / mesh visibility debugging (Warhorse docs: do not fix NPC mesh
+-- via RenderAlways / SetViewDistRatio — use Skald/STORM/appearance data).
+-- Console:  _G.MercDebugMercLifecycle = true   then load a save or wait for
+-- RebuildMercCacheDelayed; check kcd.log for [MercDebug] lines.
+-- =======================================================================
 
-function mercenaries:EnsureMercIsAlwaysRendered(ent)
-    if ent then
-        ent:RenderAlways(1)
-        ent:SetViewDistRatio(254)
-        ent:SetViewDistRatio(0)
-
-    end
+function mercenaries:_DebugLogMercLifecycle(ent, context)
+    if not _G.MercDebugMercLifecycle or not ent then return end
+    local name = ent.GetName and ent:GetName() or "?"
+    local mtype = self:GetMercType(ent) or "?"
+    local outfit = tonumber(_G.MercCurrentOutfit) or 0
+    local guid = ""
+    local ok, g = pcall(function()
+        if ent.soul and ent.soul.GetSharedSoulId then
+            return ent.soul:GetSharedSoulId()
+        end
+        return ""
+    end)
+    if ok and g then guid = tostring(g) end
+    System.LogAlways(string.format(
+        '[MercDebug] %s name=%s type=%s outfit=%d soulGuid=%s MercIdle=%s inCombat=n/a',
+        context or "lifecycle",
+        name,
+        mtype,
+        outfit,
+        guid,
+        tostring(_G.MercIdle)
+    ))
 end
+
 function mercenaries:RebuildMercCache()
     self.ActiveMercs = {}
      if _G.MercenariesDismissed then
@@ -27,11 +49,11 @@ function mercenaries:RebuildMercCache()
                 -- Only cache entities that are actually alive
                 if self:IsAliveAndWell(e, true) then
                     self.ActiveMercs[name] = e
-                    mercenaries:EnsureMercIsAlwaysRendered(e)
                     -- Restore the interaction button that was injected at hire time.
                     -- Without this, GetActions is never overridden after a save/load.
                     self:InjectInteraction(e)
                     self:EquipMercenary(e, _G.MercCurrentOutfit or 1)
+                    self:_DebugLogMercLifecycle(e, "RebuildMercCache after EquipMercenary")
                 end
             end
         end

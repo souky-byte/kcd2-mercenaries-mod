@@ -8,7 +8,7 @@ setlocal enabledelayedexpansion
 
 set "REPO_ROOT=%~dp0"
 set "REPO_ROOT=%REPO_ROOT:~0,-1%"
-set "MODS_DIR=C:\Program Files\Steam\steamapps\common\KingdomComeDeliverance2\Mods"
+set "MODS_DIR=D:\SteamLibrary\steamapps\common\KingdomComeDeliverance2\Mods"
 set "OUT_DIR=%MODS_DIR%\mercenaries"
 
 echo ============================================================
@@ -129,7 +129,7 @@ echo ============================================================
 echo  Packaging complete!
 echo  Output: %OUT_DIR%
 echo ============================================================
-start "" "C:\Program Files\Steam\steamapps\common\KingdomComeDeliverance2\Bin\Win64MasterMasterSteamPGO\KingdomCome.exe"
+start "" "D:\SteamLibrary\steamapps\common\KingdomComeDeliverance2\Bin\Win64MasterMasterSteamPGO\KingdomCome.exe"
 goto :end
 
 :error
